@@ -6,6 +6,11 @@ import pandas as pd
 ROOT=Path(__file__).resolve().parents[1]; sys.path.insert(0,str(ROOT/"modules"))
 from pipeline_common import read_table, write_table, setup_logging
 
+def merge_unique(base,path):
+    d=read_table(path)
+    if d.empty or "SNP_ID" not in d:return base
+    return base.merge(d.drop_duplicates("SNP_ID"),on="SNP_ID",how="left",suffixes=("","_extra"))
+
 def run(args):
     out=Path(args.out); out.mkdir(parents=True,exist_ok=True)
     mods=[importlib.import_module(f"{i:02d}_{name}") for i,name in [(1,"prepare_snps"),(2,"generate_allele_sequences"),(3,"local_blast"),(4,"coordinate_validation"),(5,"merge_coordinates"),(6,"local_neighborhood"),(7,"api_neighborhood"),(8,"functional_annotation"),(9,"pubmed_literature"),(10,"score_candidates"),(11,"generate_master_workbook")]]
@@ -15,14 +20,10 @@ def run(args):
     if args.gff: m6.run(str(p4),args.gff,str(p6),args.window); m7.run(str(p4),str(p6),str(p7),args.species,args.window)
     else: pd.DataFrame(columns=["SNP_ID"]).to_csv(p6,index=False); pd.DataFrame(columns=["SNP_ID"]).to_csv(p7,index=False)
     ann=read_table(p4)
-    for p in [p6,p7]:
-        d=read_table(p)
-        if not d.empty: ann=ann.merge(d.drop_duplicates("SNP_ID"),on="SNP_ID",how="left")
+    for p in [p6,p7]: ann=merge_unique(ann,p)
     write_table(ann,str(out/"annotation_input.csv")); m8.run(str(out/"annotation_input.csv"),str(p8),args.species,args.ncbi_email); m9.run(str(p8),str(p9),args.ncbi_email,args.max_articles)
     scored=read_table(p5)
-    for p in [p7,p8,p9]:
-        d=read_table(p)
-        if not d.empty: scored=scored.merge(d.drop_duplicates("SNP_ID"),on="SNP_ID",how="left",suffixes=("","_extra"))
+    for p in [p2,p7,p8,p9]: scored=merge_unique(scored,p)
     write_table(scored,str(out/"scoring_input.csv")); m10.run(str(out/"scoring_input.csv"),str(p10)); m11.run(str(p10),str(final),blast=str(p3),validation=str(p4),local_neighborhood=str(p6),api_neighborhood=str(p7),annotation=str(p8),literature=str(p9),scoring=str(p10)); return final
 
 if __name__=="__main__":
