@@ -1,9 +1,9 @@
 """Compatibility sequence-extraction module for the corrected candidate-gene pipeline.
 
 This module extracts the SNP-centered reference sequence from a reference FASTA
-and emits REF/ALT allele sequences.  It is deliberately strict about coordinate
-and REF validation so downstream BLAST results are not built from fabricated
-sequences.
+and emits REF/ALT allele sequences. It validates the reference allele against
+the FASTA before constructing the ALT sequence, preventing fabricated BLAST
+queries from being propagated downstream.
 """
 from __future__ import annotations
 
@@ -22,7 +22,7 @@ ALT_COLS = ["ALT", "Alt", "Alternate", "alternate_allele", "Allele2"]
 
 def read_fasta(path: str) -> dict[str, str]:
     records: dict[str, str] = {}
-    current = None
+    current: str | None = None
     chunks: list[str] = []
     with open(path, "rt", encoding="utf-8", errors="replace") as handle:
         for raw in handle:
@@ -40,7 +40,7 @@ def read_fasta(path: str) -> dict[str, str]:
 
 
 def get_contig(records: dict[str, str], chrom: object) -> str | None:
-    value = str(chrom)
+    value = str(chrom).strip()
     candidates = [value]
     if value.lower().startswith("chr"):
         candidates.append(value[3:])
@@ -64,17 +64,21 @@ def run(input_path: str, fasta_path: str, output_path: str, flank: int = 250) ->
         raise ValueError("Input SNP table is empty")
     if "SNP_ID" not in table.columns:
         raise ValueError("Input table must contain SNP_ID")
+    if not Path(fasta_path).exists():
+        raise FileNotFoundError(f"Reference FASTA not found: {fasta_path}")
 
     records = read_fasta(fasta_path)
-    rows = []
+    if not records:
+        raise ValueError(f"Reference FASTA contains no sequence records: {fasta_path}")
 
+    rows: list[dict[str, object]] = []
     for _, row in table.iterrows():
         sid = str(row["SNP_ID"])
         ref = clean_dna(first_value(row, REF_COLS, ""))
         alt = clean_dna(first_value(row, ALT_COLS, ""))
         chrom = first_value(row, CHR_COLS, "")
         pos_value = first_value(row, POS_COLS, None)
-        result = {
+        result: dict[str, object] = {
             "SNP_ID": sid,
             "REF": ref,
             "ALT": alt,
@@ -110,10 +114,11 @@ def run(input_path: str, fasta_path: str, output_path: str, flank: int = 250) ->
             ref_sequence = sequence[start - 1 : end]
             offset = position - start
 
+            if offset >= len(ref_sequence):
+                raise ValueError("SNP position falls outside extracted reference sequence")
             observed = ref_sequence[offset : offset + len(ref)]
             if observed != ref:
                 raise ValueError(f"REF mismatch: FASTA has {observed}, expected {ref}")
-
             if offset + len(ref) > len(ref_sequence):
                 raise ValueError("REF allele extends beyond extracted sequence")
 
