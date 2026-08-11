@@ -45,18 +45,12 @@ def resolve_path(value: str) -> str:
 
 
 def discover_blast_databases():
-    """Discover BLAST database prefixes under references/.
-
-    Databases are classified by their path/name containing 'ncbi' or
-    'ensembl'. If a database cannot be classified automatically, the pipeline
-    stops with a clear message instead of silently using the wrong database.
-    """
+    """Discover BLAST database prefixes under references/."""
     if not REFERENCES_DIR.exists():
         return "", ""
 
     suffixes = (".nhr", ".nin", ".nsq", ".ndb")
     prefixes = set()
-
     for suffix in suffixes:
         for file in REFERENCES_DIR.rglob(f"*{suffix}"):
             prefixes.add(str(file)[: -len(suffix)])
@@ -64,7 +58,6 @@ def discover_blast_databases():
     ncbi = []
     ensembl = []
     unknown = []
-
     for prefix in sorted(prefixes):
         label = prefix.lower().replace("\\", "/")
         if "ncbi" in label:
@@ -77,21 +70,12 @@ def discover_blast_databases():
     def choose(items):
         return items[0] if len(items) == 1 else ""
 
-    ncbi_db = choose(ncbi)
-    ensembl_db = choose(ensembl)
-
-    if not ncbi_db and not ensembl_db and len(unknown) == 2:
+    if not choose(ncbi) and not choose(ensembl) and len(unknown) == 2:
         LOGGER.warning(
             "Two unlabelled BLAST databases were found under references/. "
-            "Use --ncbi-db and --ensembl-db explicitly to avoid ambiguity."
+            "Use --ncbi-db and --ensembl-db explicitly."
         )
-
-    if len(ncbi) > 1:
-        LOGGER.warning("Multiple NCBI BLAST databases found: %s", ncbi)
-    if len(ensembl) > 1:
-        LOGGER.warning("Multiple Ensembl BLAST databases found: %s", ensembl)
-
-    return ncbi_db, ensembl_db
+    return choose(ncbi), choose(ensembl)
 
 
 def merge_unique(base: pd.DataFrame, path) -> pd.DataFrame:
@@ -99,13 +83,19 @@ def merge_unique(base: pd.DataFrame, path) -> pd.DataFrame:
     if not path.exists():
         LOGGER.warning("Merge file does not exist: %s", path)
         return base
-
     data = read_table(path)
     if data.empty or "SNP_ID" not in data.columns:
         return base
-
     data = data.drop_duplicates(subset=["SNP_ID"], keep="first")
     return base.merge(data, on="SNP_ID", how="left", suffixes=("", "_extra"))
+
+
+def merge_many(base: pd.DataFrame, paths) -> pd.DataFrame:
+    """Merge one-row-per-SNP tables into the main table without dropping fields."""
+    out = base
+    for path in paths:
+        out = merge_unique(out, path)
+    return out
 
 
 def load_modules():
@@ -128,7 +118,6 @@ def run(args):
 
     ncbi_db = resolve_path(args.ncbi_db)
     ensembl_db = resolve_path(args.ensembl_db)
-
     if not ncbi_db or not ensembl_db:
         auto_ncbi, auto_ensembl = discover_blast_databases()
         ncbi_db = ncbi_db or auto_ncbi
@@ -138,16 +127,12 @@ def run(args):
         LOGGER.info("NCBI local BLAST DB: %s", ncbi_db)
     else:
         LOGGER.warning("No NCBI local BLAST database detected.")
-
     if ensembl_db:
         LOGGER.info("Ensembl local BLAST DB: %s", ensembl_db)
     else:
         LOGGER.warning("No Ensembl local BLAST database detected.")
 
-    (
-        m1, m2, m3, m4, m5, m6, m7,
-        m8, m9, m10, m11,
-    ) = load_modules()
+    (m1, m2, m3, m4, m5, m6, m7, m8, m9, m10, m11) = load_modules()
 
     p1 = out / "01_prepared.csv"
     p2 = out / "02_alleles.csv"
@@ -191,9 +176,7 @@ def run(args):
 
     LOGGER.info("MODULE 08: functional annotation")
     annotation_input = out / "annotation_input.csv"
-    annotation_data = read_table(p4)
-    annotation_data = merge_unique(annotation_data, p6)
-    annotation_data = merge_unique(annotation_data, p7)
+    annotation_data = merge_many(read_table(p5), [p6, p7])
     write_table(annotation_data, str(annotation_input))
     m8.run(str(annotation_input), str(p8), args.species, args.ncbi_email)
 
@@ -202,11 +185,7 @@ def run(args):
 
     LOGGER.info("MODULE 10: candidate scoring")
     scoring_input = out / "scoring_input.csv"
-    scored_data = read_table(p5)
-    scored_data = merge_unique(scored_data, p2)
-    scored_data = merge_unique(scored_data, p7)
-    scored_data = merge_unique(scored_data, p8)
-    scored_data = merge_unique(scored_data, p9)
+    scored_data = merge_many(read_table(p5), [p2, p6, p7, p8, p9])
     write_table(scored_data, str(scoring_input))
     m10.run(str(scoring_input), str(p10))
 
@@ -228,7 +207,7 @@ def build_parser():
     parser.add_argument("--flank", type=int, default=250)
     parser.add_argument("--ncbi-db", default="")
     parser.add_argument("--ensembl-db", default="")
-    parser.add_argument("--online-ncbi", action="store_true", help="Enable optional online NCBI BLAST cross-check.")
+    parser.add_argument("--online-ncbi", action="store_true")
     parser.add_argument("--gff", default="")
     parser.add_argument("--out", default="results")
     parser.add_argument("--species", default="triticum_aestivum")
